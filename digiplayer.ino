@@ -7,59 +7,33 @@
 //#include <Adafruit_TinyFlash.h>
 //#include <avr/io.h>
 #include <avr/pgmspace.h>
+#include <core_timers.h>
 #include "fbnotify.h"
 
-
-#define PIN_LED 1
-void blink(int times) {
-  for (int i=0; i<times; i++) {
-    digitalWrite(PIN_LED, HIGH);   // turn the LED on (HIGH is the voltage level)
-    delay(400);               // wait for a second
-    digitalWrite(PIN_LED, LOW);    // turn the LED off by making the voltage LOW
-    delay(250);
-  }
-}
-
-#if(F_CPU == 16000000L)
-#error "Compile for 8 MHz Trinket"
-#endif
-
-//Adafruit_TinyFlash flash;
-uint16_t           sample_rate, delay_count;
-uint32_t           samples;
+uint16_t           delay_count;
 volatile uint32_t  index = 0L;
-char donePlaying;
+char donePlaying = false;
 
 void stopPlaying() {
+  //stop sending PWM
+  //pinMode(4, INPUT);
   //reset registers to defaults
-//  PLLCSR = 0x03;
-  TIMSK = 0x04;
-  TCCR1 = 0xc7;
-  OCR1C = 0xff;
-  OCR1B = 0x00;
-  TCCR0A = 0x01;
-  TCCR0B = 0x03;
-  OCR0A = 0x00;
-  TIMSK = 0x04;
-  donePlaying = true;  
+  Timer0_SetToPowerup();
+  Timer0_SetWaveformGenerationMode(Timer0_Normal);
+  Timer0_ClockSelect(Timer0_Prescale_Value_1024);
+  Timer1_SetToPowerup();
+  Timer1_SetWaveformGenerationMode(Timer1_Normal);
+  Timer1_ClockSelect(Timer1_Prescale_Value_1024);
+  donePlaying = true;
 }
 
 void startPlaying() {
   uint8_t  data[6];
   uint32_t bytes;
-
-//  if(!(bytes = flash.begin())) {     // Flash init error?
-//    for(;; PORTB ^= 2, delay(250));  // Blink 2x/sec
-//  }
-
-  // First six bytes contain sample rate, number of samples
-//  flash.beginRead(0);
-//  for(uint8_t i=0; i<6; i++) data[i] = flash.readNextByte();
-  sample_rate = sounddata_sampleRate;
-  samples     = sounddata_length;
+  donePlaying = false;
 
   PLLCSR |= _BV(PLLE);               // Enable 64 MHz PLL
-  delayMicroseconds(100);            // Stabilize
+  delay(100);            // Stabilize
   while(!(PLLCSR & _BV(PLOCK)));     // Wait for it...
   PLLCSR |= _BV(PCKE);               // Timer1 source = PLL
 
@@ -82,24 +56,24 @@ void startPlaying() {
   // so it's rare that the playback rate will precisely match
   // the data, but the difference is usually imperceptible.
   TCCR0A = _BV(WGM01) | _BV(WGM00);  // Mode 7 (fast PWM)
-  if(sample_rate >= 31250) {
+  if(sounddata_sampleRate >= 31250) {
     TCCR0B = _BV(WGM02) | _BV(CS00); // 1:1 prescale
-    OCR0A  = ((F_CPU + (sample_rate / 2)) / sample_rate) - 1;
+    OCR0A  = ((F_CPU + (sounddata_sampleRate / 2)) / sounddata_sampleRate) - 1;
   } else {                           // Good down to about 3900 Hz
     TCCR0B = _BV(WGM02) | _BV(CS01); // 1:8 prescale
-    OCR0A  = (((F_CPU / 8L) + (sample_rate / 2)) / sample_rate) - 1;
+    OCR0A  = (((F_CPU / 8L) + (sounddata_sampleRate / 2)) / sounddata_sampleRate) - 1;
   }
   TIMSK = _BV(OCIE0A); // Enable compare match, disable overflow
 }
 
 ISR(TIMER0_COMPA_vect) {
-//  OCR1B = flash.readNextByte();      // Read flash, write PWM reg.
-  OCR1B = pgm_read_byte(&sounddata_data[index]);
-  if(++index >= samples) {           // End of audio data?
-      index = 0;                       // We must repeat!
-      stopPlaying();
-//    flash.endRead();
-//    flash.beginRead(6);              // Skip 6 byte header
+  if (donePlaying == false) {
+    OCR1B = pgm_read_byte(&sounddata_data[index]);
+    if(++index > sounddata_length) {           // End of audio data?
+        index = 0;                       // We must repeat!
+        OCR1B  = 127;                      // 50% duty at start
+        stopPlaying();
+    }
   }
 }
 
@@ -108,10 +82,12 @@ void setup() {
 }
 
 void loop() {
-//  if (donePlaying) {
-//    delayMicroseconds(5000000);
-//    startPlaying();
-//  }
-  
-}
+  int interval = 0;
+  if (donePlaying) {
+    interval = 1000000 + rand() % 6000000;
+    /*if (rand()%3 == 2) interval = 10000;*/ //for some reason math doesn't work right now
+    delay(interval);
 
+    startPlaying();
+  }
+}
